@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>Chat Demo</title>
+    <style>
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            margin: 20px
+        }
+        
+        #log {
+            border: 1px solid #ccc;
+            height: 300px;
+            overflow: auto;
+            padding: 8px
+        }
+    </style>
+</head>
+
+<body>
+    <h2>Chat App — Demo (Step 1)</h2>
+    <label>Username: <input id="username" value="alice"></label>
+    <button id="connect">Connect</button>
+    <button id="who">Who is online</button>
+    <div id="log"></div>
+    <input id="msg" placeholder="Type a message and press Enter" style="width:60%">
+
+
+    <script>
+        let ws = null;
+        const log = (t) => {
+            const l = document.getElementById('log');
+            l.innerHTML += t + '<br/>';
+            l.scrollTop = l.scrollHeight
+        }
+        document.getElementById('connect').onclick = () => {
+            const u = document.getElementById('username').value.trim();
+            if (!u) return alert('enter username')
+            ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/' + u)
+            ws.onopen = () => log('connected as ' + u)
+            ws.onmessage = (ev) => log(ev.data)
+            ws.onclose = () => log('socket closed')
+        }
+        document.getElementById('who').onclick = () => {
+            if (!ws) return alert('connect first');
+            ws.send('who')
+        }
+        document.getElementById('msg').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                if (!ws) return alert('connect first')
+                ws.send(document.getElementById('msg').value)
+                document.getElementById('msg').value = ''
+            }
+        })
+    </script>
+</body>
+
+</html>
