@@ -51,7 +51,7 @@ def authenticate_user(db: Session, username: str, password: str):
 
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
-    global db
+    # global db
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -64,9 +64,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
             raise credentials_exception
     except JWTError:
         raise credentials_exception
-    db = db.SessionLocal()
-    user = get_user(db, username=username)
-    db.close()
+    d_b = db.SessionLocal()
+    user = get_user(d_b, username=username)
+    d_b.close()
     if user is None:
         raise credentials_exception
     return user

@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from app import db, models, auth, schemas
+from typing import Dict, Set
+import json
 import asyncio
 import uvicorn
 
@@ -123,6 +125,97 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         await manager.disconnect(username)
         await manager.broadcast(f"{username} left")
+    
+    
+class ThreadConnectionManager:
+    def __init__(self):
+        self.rooms: Dict[int, Set[WebSocket]] = {}
+
+
+    async def connect(self, thread_id: int, websocket: WebSocket):
+        
+        self.rooms.setdefault(thread_id, set()).add(websocket)
+    
+    def disconnect(self, thread_id: int, websocket: WebSocket):
+        if thread_id in self.rooms:
+            self.rooms[thread_id].discard(websocket)
+            if not self.rooms[thread_id]:
+                del self.rooms[thread_id]
+
+
+    async def broadcast(self, thread_id: int, message: dict):
+        for ws in self.rooms.get(thread_id, []):
+            await ws.send_text(json.dumps(message))
+
+
+thread_manager = ThreadConnectionManager()
+
+
+@app.websocket("/ws/chat")
+async def chat_socket(websocket: WebSocket):
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=1008)
+        return
+    
+    await websocket.accept()
+
+
+    try:
+        user = await auth.get_current_user(token)
+    except Exception:
+        await websocket.close(code=1008)
+        return
+
+
+    joined_threads = set()
+
+
+    try:
+        while True:
+            data = json.loads(await websocket.receive_text())
+
+
+            if data["action"] == "join":
+                thread_id = data["thread_id"]
+                await thread_manager.connect(thread_id, websocket)
+                joined_threads.add(thread_id)
+
+
+                await thread_manager.broadcast(thread_id, {
+                "system": True,
+                "message": f"{user.username} joined thread"
+                })
+
+
+            elif data["action"] == "message":
+                thread_id = data["thread_id"]
+                content = data["content"]
+
+
+                session = db.SessionLocal()
+                msg = models.Message(
+                    thread_id=thread_id,
+                    sender_id=user.id,
+                    content=content
+                )
+                session.add(msg)
+                session.commit()
+                session.refresh(msg)
+                session.close()
+
+
+                await thread_manager.broadcast(thread_id, {
+                    "id": msg.id,
+                    "thread_id": thread_id,
+                    "sender": user.username,
+                    "content": msg.content
+                })
+
+
+    except WebSocketDisconnect:
+        for tid in joined_threads:
+            thread_manager.disconnect(tid, websocket)
 
 
 @app.get("/")
@@ -135,16 +228,17 @@ async def get_index(request: Request):
 async def create_thread(
     data: schemas.CreateThread, user=Depends(auth.get_current_user)
 ):
+    session = db.SessionLocal()
     thread = models.ChatThread(
         name=data.name, is_group=data.is_group, created_by=user.id
     )
-    db.add(thread)
-    db.commit()
-    db.refresh(thread)
+    session.add(thread)
+    session.commit()
+    session.refresh(thread)
 
     member = models.ThreadMember(thread_id=thread.id, user_id=user.id, is_admin=True)
-    db.add(member)
-    db.commit()
+    session.add(member)
+    session.commit()
 
     return {"id": thread.id, "name": thread.name}
 
@@ -153,16 +247,18 @@ async def create_thread(
 async def add_member(
     thread_id: int, data: schemas.AddMember, user=Depends(auth.get_current_user)
 ):
+    session = db.SessionLocal()
     m = models.ThreadMember(
         thread_id=thread_id, user_id=data.user_id, is_admin=data.is_admin
     )
-    db.add(m)
-    db.commit()
+    session.add(m)
+    session.commit()
     return {"status": "added"}
 
 
 @app.post("/api/messages")
 async def send_message(data: schemas.SendMessage, user=Depends(auth.get_current_user)):
+    session = db.SessionLocal()
     msg = models.Message(
         thread_id=data.thread_id,
         sender_id=user.id,
@@ -170,9 +266,9 @@ async def send_message(data: schemas.SendMessage, user=Depends(auth.get_current_
         reply_to_id=data.reply_to_id,
         forward_from_id=data.forward_from_id,
     )
-    db.add(msg)
-    db.commit()
-    db.refresh(msg)
+    session.add(msg)
+    session.commit()
+    session.refresh(msg)
     return {"id": msg.id, "content": msg.content}
 
 
