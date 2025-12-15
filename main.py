@@ -3,20 +3,32 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
     Request,
+    UploadFile,
+    File,
     Depends,
     HTTPException,
 )
 
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from app import db, models, auth, schemas
 from typing import Dict, Set
+from presence import PresenceManager
 import json
 import asyncio
 import uvicorn
+import os
+import uuid
+import shutil
+import re
+import random
+from pathlib import Path
+
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 app = FastAPI()
@@ -37,6 +49,19 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Create DB tables (for dev)
 models.Base.metadata.create_all(bind=db.engine)
+
+presence_manager = PresenceManager()
+
+
+def safe_filename(original: str) -> str:
+    name = Path(original).stem
+    ext = Path(original).suffix
+
+    # remove weird chars
+    name = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
+
+    suffix = random.randint(1000, 9999)
+    return f"{name}_{suffix}{ext}"
 
 
 @app.post("/api/register", response_model=schemas.UserOut)
@@ -125,23 +150,20 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         await manager.disconnect(username)
         await manager.broadcast(f"{username} left")
-    
-    
+
+
 class ThreadConnectionManager:
     def __init__(self):
         self.rooms: Dict[int, Set[WebSocket]] = {}
 
-
     async def connect(self, thread_id: int, websocket: WebSocket):
-        
         self.rooms.setdefault(thread_id, set()).add(websocket)
-    
+
     def disconnect(self, thread_id: int, websocket: WebSocket):
         if thread_id in self.rooms:
             self.rooms[thread_id].discard(websocket)
             if not self.rooms[thread_id]:
                 del self.rooms[thread_id]
-
 
     async def broadcast(self, thread_id: int, message: dict):
         for ws in self.rooms.get(thread_id, []):
@@ -157,63 +179,65 @@ async def chat_socket(websocket: WebSocket):
     if not token:
         await websocket.close(code=1008)
         return
-    
-    await websocket.accept()
 
+    await websocket.accept()
 
     try:
         user = await auth.get_current_user(token)
+        presence_manager.connect(user.id, websocket)
     except Exception:
         await websocket.close(code=1008)
         return
 
-
     joined_threads = set()
-
 
     try:
         while True:
             data = json.loads(await websocket.receive_text())
-
 
             if data["action"] == "join":
                 thread_id = data["thread_id"]
                 await thread_manager.connect(thread_id, websocket)
                 joined_threads.add(thread_id)
 
-
-                await thread_manager.broadcast(thread_id, {
-                "system": True,
-                "message": f"{user.username} joined thread"
-                })
-
+                await thread_manager.broadcast(
+                    thread_id,
+                    {"system": True, "message": f"{user.username} joined thread"},
+                )
 
             elif data["action"] == "message":
                 thread_id = data["thread_id"]
                 content = data["content"]
 
-
                 session = db.SessionLocal()
                 msg = models.Message(
                     thread_id=thread_id,
                     sender_id=user.id,
-                    content=content
+                    content=content,
+                    reply_to_id=data.get("reply_to_id"),
+                    forward_from_id=data.get("forward_from_id"),
                 )
                 session.add(msg)
                 session.commit()
                 session.refresh(msg)
                 session.close()
 
-
-                await thread_manager.broadcast(thread_id, {
-                    "id": msg.id,
-                    "thread_id": thread_id,
-                    "sender": user.username,
-                    "content": msg.content
-                })
-
+                await thread_manager.broadcast(
+                    thread_id,
+                    {
+                        "type": "message",
+                        "id": msg.id,
+                        "thread_id": thread_id,
+                        "sender": user.username,
+                        "content": msg.content,
+                        "reply_to_id": msg.reply_to_id,
+                        "forward_from_id": msg.forward_from_id,
+                    },
+                )
 
     except WebSocketDisconnect:
+        presence_manager.disconnect(user.id, websocket)
+        print(f"User {user.username} went offline")
         for tid in joined_threads:
             thread_manager.disconnect(tid, websocket)
 
@@ -270,6 +294,61 @@ async def send_message(data: schemas.SendMessage, user=Depends(auth.get_current_
     session.commit()
     session.refresh(msg)
     return {"id": msg.id, "content": msg.content}
+
+
+@app.get("/api/online-users")
+def get_online_users(current_user=Depends(auth.get_current_user)):
+    return {"online_user_ids": presence_manager.list_online_users()}
+
+
+@app.post("/api/threads/{thread_id}/upload")
+async def upload_file(
+    thread_id: int, file: UploadFile = File(...), user=Depends(auth.get_current_user)
+):
+    session = db.SessionLocal()
+
+    ext = file.filename.split(".")[-1]
+    filename = safe_filename(file.filename)
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    msg = models.Message(thread_id=thread_id, sender_id=user.id, file_path=file_path)
+
+    session.add(msg)
+    session.commit()
+    session.refresh(msg)
+    session.close()
+
+    # 🔥 BROADCAST FILE MESSAGE HERE
+    await thread_manager.broadcast(
+        thread_id,
+        {
+            "type": "file",
+            "id": msg.id,
+            "thread_id": thread_id,
+            "sender": user.username,
+            "file_url": f"/api/files/{msg.id}",
+        },
+    )
+
+    return {"id": msg.id, "file_url": f"/api/files/{msg.id}"}
+
+
+@app.get("/api/files/{message_id}")
+def get_file(message_id: int, user=Depends(auth.get_current_user)):
+    session = db.SessionLocal()
+
+    msg = session.query(models.Message).filter(models.Message.id == message_id).first()
+
+    if not msg or not msg.file_path:
+        session.close()
+        raise HTTPException(status_code=404, detail="File not found")
+
+    session.close()
+
+    return FileResponse(msg.file_path, filename=os.path.basename(msg.file_path))
 
 
 if __name__ == "__main__":
