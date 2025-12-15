@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy import func, desc
 from sqlalchemy.orm import Session
 from app import db, models, auth, schemas
 from typing import Dict, Set
@@ -26,6 +27,7 @@ import shutil
 import re
 import random
 from pathlib import Path
+from datetime import datetime
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -51,6 +53,16 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 models.Base.metadata.create_all(bind=db.engine)
 
 presence_manager = PresenceManager()
+
+
+def require_thread_admin(session, thread_id: int, user_id: int):
+    member = (
+        session.query(models.ThreadMember)
+        .filter_by(thread_id=thread_id, user_id=user_id)
+        .first()
+    )
+    if not member or not member.is_admin:
+        raise HTTPException(status_code=403, detail="Admin privileges required")
 
 
 def safe_filename(original: str) -> str:
@@ -173,6 +185,12 @@ class ThreadConnectionManager:
 thread_manager = ThreadConnectionManager()
 
 
+async def broadcast_global(message: dict):
+    for sockets in presence_manager.online_users.values():
+        for ws in sockets:
+            await ws.send_text(json.dumps(message))
+
+
 @app.websocket("/ws/chat")
 async def chat_socket(websocket: WebSocket):
     token = websocket.query_params.get("token")
@@ -184,7 +202,16 @@ async def chat_socket(websocket: WebSocket):
 
     try:
         user = await auth.get_current_user(token)
-        presence_manager.connect(user.id, websocket)
+        is_first = presence_manager.connect(user.id, websocket)
+        if is_first:
+            await broadcast_global(
+                {
+                    "type": "presence",
+                    "user_id": user.id,
+                    "username": user.username,
+                    "status": "online",
+                }
+            )
     except Exception:
         await websocket.close(code=1008)
         return
@@ -220,6 +247,24 @@ async def chat_socket(websocket: WebSocket):
                 session.add(msg)
                 session.commit()
                 session.refresh(msg)
+
+                members = (
+                    session.query(models.ThreadMember)
+                    .filter(models.ThreadMember.thread_id == thread_id)
+                    .all()
+                )
+
+                for m in members:
+                    if m.user_id != user.id:
+                        session.add(
+                            models.MessageReceipt(
+                                message_id=msg.id,
+                                user_id=m.user_id,
+                                delivered_at=datetime.utcnow(),
+                            )
+                        )
+
+                session.commit()
                 session.close()
 
                 await thread_manager.broadcast(
@@ -235,7 +280,35 @@ async def chat_socket(websocket: WebSocket):
                     },
                 )
 
+                members = (
+                    session.query(models.ThreadMember)
+                    .filter_by(thread_id=thread_id)
+                    .all()
+                )
+
+                for m in members:
+                    if m.user_id != user.id:
+                        receipt = models.MessageReceipt(
+                            message_id=msg.id,
+                            user_id=m.user_id,
+                            delivered_at=datetime.utcnow(),
+                        )
+                        session.add(receipt)
+
+                session.commit()
+
     except WebSocketDisconnect:
+        is_offline = presence_manager.disconnect(user.id, websocket)
+
+        if is_offline:
+            await broadcast_global(
+                {
+                    "type": "presence",
+                    "user_id": user.id,
+                    "username": user.username,
+                    "status": "offline",
+                }
+            )
         presence_manager.disconnect(user.id, websocket)
         print(f"User {user.username} went offline")
         for tid in joined_threads:
@@ -267,6 +340,56 @@ async def create_thread(
     return {"id": thread.id, "name": thread.name}
 
 
+@app.post("/api/threads/{thread_id}/read")
+async def mark_thread_read(thread_id: int, user=Depends(auth.get_current_user)):
+    session = db.SessionLocal()
+
+    # ensure membership
+    member = (
+        session.query(models.ThreadMember)
+        .filter_by(thread_id=thread_id, user_id=user.id)
+        .first()
+    )
+    if not member:
+        session.close()
+        raise HTTPException(403, "Not a thread member")
+
+    # mark all delivered messages as read
+    receipts = (
+        session.query(models.MessageReceipt)
+        .join(models.Message)
+        .filter(
+            models.Message.thread_id == thread_id,
+            models.MessageReceipt.user_id == user.id,
+            models.MessageReceipt.read_at.is_(None),
+        )
+        .all()
+    )
+
+    now = datetime.utcnow()
+    for r in receipts:
+        r.read_at = now
+
+    session.commit()
+    session.close()
+
+    # Broadcast read receipt asynchronously
+    asyncio.create_task(
+        thread_manager.broadcast(
+            thread_id,
+            {
+                "type": "read",
+                "thread_id": thread_id,
+                "user_id": user.id,
+                "username": user.username,
+                "read_at": now.isoformat(),
+            },
+        )
+    )
+
+    return {"status": "ok"}
+
+
 @app.post("/api/threads/{thread_id}/members")
 async def add_member(
     thread_id: int, data: schemas.AddMember, user=Depends(auth.get_current_user)
@@ -278,6 +401,130 @@ async def add_member(
     session.add(m)
     session.commit()
     return {"status": "added"}
+
+
+@app.post("/api/threads/{thread_id}/leave")
+async def leave_thread(thread_id: int, user=Depends(auth.get_current_user)):
+    session = db.SessionLocal()
+
+    member = (
+        session.query(models.ThreadMember)
+        .filter_by(thread_id=thread_id, user_id=user.id)
+        .first()
+    )
+
+    if not member:
+        session.close()
+        raise HTTPException(404, "Not a member of this thread")
+
+    target = member.user.username
+
+    session.delete(member)
+    session.commit()
+    session.close()
+
+    await thread_manager.broadcast(
+        thread_id, {"system": True, "message": f"{target} left"}
+    )
+
+    return {"status": "left thread"}
+
+
+@app.post("/api/threads/{thread_id}/remove")
+async def remove_member(
+    thread_id: int,
+    data: schemas.RemoveMember,
+    user=Depends(auth.get_current_user),
+):
+    session = db.SessionLocal()
+
+    require_thread_admin(session, thread_id, user.id)
+
+    member = (
+        session.query(models.ThreadMember)
+        .filter_by(thread_id=thread_id, user_id=data.user_id)
+        .first()
+    )
+
+    if not member:
+        session.close()
+        raise HTTPException(404, "User not in thread")
+
+    target = member.user.username
+
+    session.delete(member)
+    session.commit()
+    session.close()
+    await thread_manager.broadcast(
+        thread_id,
+        {"system": True, "message": f"{user.name} removed {target}"},
+    )
+
+    return {"status": "member removed"}
+
+
+@app.post("/api/threads/{thread_id}/promote")
+async def promote_member(
+    thread_id: int,
+    data: schemas.PromoteMember,
+    user=Depends(auth.get_current_user),
+):
+    session = db.SessionLocal()
+    require_thread_admin(session, thread_id, user.id)
+
+    member = (
+        session.query(models.ThreadMember)
+        .filter_by(thread_id=thread_id, user_id=data.user_id)
+        .first()
+    )
+
+    if not member:
+        session.close()
+        raise HTTPException(404, "User not found")
+
+    member.is_admin = True
+
+    target = member.user.username
+    session.commit()
+    session.close()
+    await thread_manager.broadcast(
+        thread_id,
+        {"system": True, "message": f"{target} was promoted to admin"},
+    )
+
+    return {"status": "promoted"}
+
+
+@app.post("/api/threads/{thread_id}/demote")
+async def demote_member(
+    thread_id: int,
+    data: schemas.DemoteMember,
+    user=Depends(auth.get_current_user),
+):
+    session = db.SessionLocal()
+    require_thread_admin(session, thread_id, user.id)
+
+    member = (
+        session.query(models.ThreadMember)
+        .filter_by(thread_id=thread_id, user_id=data.user_id)
+        .first()
+    )
+
+    if not member or not member.is_admin:
+        session.close()
+        raise HTTPException(400, "User is not an admin")
+
+    member.is_admin = False
+
+    target = member.user.username
+    session.commit()
+    session.close()
+    await thread_manager.broadcast(
+        thread_id,
+        {"system": True, "message": f"{target} was removed from admin"},
+    )
+
+    return {"status": "demoted"}
 
 
 @app.post("/api/messages")
@@ -298,7 +545,17 @@ async def send_message(data: schemas.SendMessage, user=Depends(auth.get_current_
 
 @app.get("/api/online-users")
 def get_online_users(current_user=Depends(auth.get_current_user)):
-    return {"online_user_ids": presence_manager.list_online_users()}
+    session = db.SessionLocal()
+
+    users = (
+        session.query(models.User)
+        .filter(models.User.id.in_(presence_manager.list_online_users()))
+        .all()
+    )
+
+    session.close()
+
+    return [{"id": u.id, "username": u.username} for u in users]
 
 
 @app.post("/api/threads/{thread_id}/upload")
@@ -368,6 +625,76 @@ def get_message(message_id: int, user=Depends(auth.get_current_user)):
         "forward_from_id": msg.forward_from_id,
         "file_path": msg.file_path,
     }
+
+
+@app.post("/api/threads/{thread_id}/read")
+def mark_thread_read(thread_id: int, user=Depends(auth.get_current_user)):
+    session = db.SessionLocal()
+
+    receipts = (
+        session.query(models.MessageReceipt)
+        .join(models.Message)
+        .filter(
+            models.Message.thread_id == thread_id,
+            models.MessageReceipt.user_id == user.id,
+            models.MessageReceipt.read_at.is_(None),
+        )
+        .all()
+    )
+
+    now = datetime.utcnow()
+    for r in receipts:
+        r.read_at = now
+
+    session.commit()
+    session.close()
+
+    return {"status": "ok"}
+
+
+@app.get("/api/chats")
+def get_chat_list(user=Depends(auth.get_current_user)):
+    session = db.SessionLocal()
+
+    threads = (
+        session.query(
+            models.ChatThread.id.label("thread_id"),
+            models.ChatThread.name.label("thread_name"),
+            models.ChatThread.is_group,
+            func.max(models.Message.created_at).label("last_time"),
+        )
+        .join(
+            models.ThreadMember, models.ThreadMember.thread_id == models.ChatThread.id
+        )
+        .outerjoin(models.Message, models.Message.thread_id == models.ChatThread.id)
+        .filter(models.ThreadMember.user_id == user.id)
+        .group_by(models.ChatThread.id)
+        .order_by(desc("last_time"))
+        .all()
+    )
+
+    result = []
+
+    for t in threads:
+        last_msg = (
+            session.query(models.Message)
+            .filter(models.Message.thread_id == t.thread_id)
+            .order_by(models.Message.created_at.desc())
+            .first()
+        )
+
+        result.append(
+            {
+                "thread_id": t.thread_id,
+                "name": t.thread_name,
+                "is_group": t.is_group,
+                "last_message": last_msg.content if last_msg else None,
+                "last_message_time": last_msg.created_at if last_msg else None,
+            }
+        )
+
+    session.close()
+    return result
 
 
 if __name__ == "__main__":

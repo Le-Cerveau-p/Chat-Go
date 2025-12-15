@@ -38,6 +38,7 @@ class ThreadMember(Base):
     is_admin = Column(Boolean, default=False)
 
     thread = relationship("ChatThread", back_populates="members")
+    user = relationship("User")
 
 
 class Message(Base):
@@ -53,3 +54,16 @@ class Message(Base):
     file_path = Column(String, nullable=True)
 
     thread = relationship("ChatThread", back_populates="messages")
+
+
+class MessageReceipt(Base):
+    __tablename__ = "message_receipts"
+
+    id = Column(Integer, primary_key=True)
+    message_id = Column(Integer, ForeignKey("messages.id", ondelete="CASCADE"))
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+
+    delivered_at = Column(DateTime, nullable=True)
+    read_at = Column(DateTime, nullable=True)
+
+    message = relationship("Message", backref="receipts")

@@ -37,3 +37,15 @@ class SendMessage(BaseModel):
     content: Optional[str] = None
     reply_to_id: Optional[int] = None
     forward_from_id: Optional[int] = None
+
+
+class RemoveMember(BaseModel):
+    user_id: int
+
+
+class PromoteMember(BaseModel):
+    user_id: int
+
+
+class DemoteMember(BaseModel):
+    user_id: int
