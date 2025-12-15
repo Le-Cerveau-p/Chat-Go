@@ -351,5 +351,24 @@ def get_file(message_id: int, user=Depends(auth.get_current_user)):
     return FileResponse(msg.file_path, filename=os.path.basename(msg.file_path))
 
 
+@app.get("/api/messages/{message_id}")
+def get_message(message_id: int, user=Depends(auth.get_current_user)):
+    session = db.SessionLocal()
+    msg = session.query(models.Message).get(message_id)
+    session.close()
+
+    if not msg:
+        raise HTTPException(404, "Message not found")
+
+    return {
+        "id": msg.id,
+        "content": msg.content,
+        "sender_id": msg.sender_id,
+        "reply_to_id": msg.reply_to_id,
+        "forward_from_id": msg.forward_from_id,
+        "file_path": msg.file_path,
+    }
+
+
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
