@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
+from dotenv import load_dotenv
 from sqlalchemy import func, desc
 from sqlalchemy.orm import Session
 from app import db, models, auth, schemas
@@ -29,17 +30,22 @@ import random
 from pathlib import Path
 from datetime import datetime
 
+
+load_dotenv()
+
+
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-app = FastAPI()
+app = FastAPI(title=os.getenv("APP_NAME", "Echo"))
 
+origins = os.getenv("CORS_ORIGINS", "").split(",")
 
 # Allow browser dev origins (adjust in prod)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -296,6 +302,34 @@ async def chat_socket(websocket: WebSocket):
                         session.add(receipt)
 
                 session.commit()
+
+            elif data["action"] == "typing_start":
+                thread_id = data["thread_id"]
+
+                await thread_manager.broadcast(
+                    thread_id,
+                    {
+                        "type": "typing",
+                        "thread_id": thread_id,
+                        "user_id": user.id,
+                        "username": user.username,
+                        "is_typing": True,
+                    },
+                )
+
+            elif data["action"] == "typing_stop":
+                thread_id = data["thread_id"]
+
+                await thread_manager.broadcast(
+                    thread_id,
+                    {
+                        "type": "typing",
+                        "thread_id": thread_id,
+                        "user_id": user.id,
+                        "username": user.username,
+                        "is_typing": False,
+                    },
+                )
 
     except WebSocketDisconnect:
         is_offline = presence_manager.disconnect(user.id, websocket)
