@@ -206,3 +206,19 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 uploads/
+*.pyc
+
+# Database (dev only)
+chat_app.db
+
+# Node / frontend
+node_modules/
+dist/
+
+# Env files
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db

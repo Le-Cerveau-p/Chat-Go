@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from dotenv import load_dotenv
 from sqlalchemy import func, desc
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app import db, models, auth, schemas
 from typing import Dict, Set
 from presence import PresenceManager
@@ -45,7 +45,10 @@ origins = os.getenv("CORS_ORIGINS", "").split(",")
 # Allow browser dev origins (adjust in prod)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=[
+        "http://localhost:5173",  # React + Vite
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -184,8 +187,16 @@ class ThreadConnectionManager:
                 del self.rooms[thread_id]
 
     async def broadcast(self, thread_id: int, message: dict):
+        dead_sockets = []
+
         for ws in self.rooms.get(thread_id, []):
-            await ws.send_text(json.dumps(message))
+            try:
+                await ws.send_text(json.dumps(message))
+            except RuntimeError:
+                dead_sockets.append(ws)
+
+        for ws in dead_sockets:
+            self.disconnect(thread_id, ws)
 
 
 thread_manager = ThreadConnectionManager()
@@ -204,10 +215,10 @@ async def chat_socket(websocket: WebSocket):
         await websocket.close(code=1008)
         return
 
+    user = await auth.get_current_user(token)
     await websocket.accept()
 
     try:
-        user = await auth.get_current_user(token)
         is_first = presence_manager.connect(user.id, websocket)
         if is_first:
             await broadcast_global(
@@ -254,6 +265,13 @@ async def chat_socket(websocket: WebSocket):
                 session.commit()
                 session.refresh(msg)
 
+                msg_id = msg.id
+                msg_content = msg.content
+                reply_to_id = msg.reply_to_id
+                forward_from_id = msg.forward_from_id
+                user_username = user.username
+                created_at = (msg.created_at.isoformat(),)
+
                 members = (
                     session.query(models.ThreadMember)
                     .filter(models.ThreadMember.thread_id == thread_id)
@@ -277,31 +295,15 @@ async def chat_socket(websocket: WebSocket):
                     thread_id,
                     {
                         "type": "message",
-                        "id": msg.id,
+                        "id": msg_id,
                         "thread_id": thread_id,
-                        "sender": user.username,
-                        "content": msg.content,
-                        "reply_to_id": msg.reply_to_id,
-                        "forward_from_id": msg.forward_from_id,
+                        "sender": user_username,
+                        "content": msg_content,
+                        "reply_to_id": reply_to_id,
+                        "forward_from_id": forward_from_id,
+                        "created_at": created_at,
                     },
                 )
-
-                members = (
-                    session.query(models.ThreadMember)
-                    .filter_by(thread_id=thread_id)
-                    .all()
-                )
-
-                for m in members:
-                    if m.user_id != user.id:
-                        receipt = models.MessageReceipt(
-                            message_id=msg.id,
-                            user_id=m.user_id,
-                            delivered_at=datetime.utcnow(),
-                        )
-                        session.add(receipt)
-
-                session.commit()
 
             elif data["action"] == "typing_start":
                 thread_id = data["thread_id"]
@@ -343,7 +345,7 @@ async def chat_socket(websocket: WebSocket):
                     "status": "offline",
                 }
             )
-        presence_manager.disconnect(user.id, websocket)
+
         print(f"User {user.username} went offline")
         for tid in joined_threads:
             thread_manager.disconnect(tid, websocket)
@@ -405,7 +407,6 @@ async def mark_thread_read(thread_id: int, user=Depends(auth.get_current_user)):
         r.read_at = now
 
     session.commit()
-    session.close()
 
     # Broadcast read receipt asynchronously
     asyncio.create_task(
@@ -420,6 +421,8 @@ async def mark_thread_read(thread_id: int, user=Depends(auth.get_current_user)):
             },
         )
     )
+
+    session.close()
 
     return {"status": "ok"}
 
@@ -598,14 +601,20 @@ async def upload_file(
 ):
     session = db.SessionLocal()
 
-    ext = file.filename.split(".")[-1]
     filename = safe_filename(file.filename)
     file_path = os.path.join(UPLOAD_DIR, filename)
 
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    msg = models.Message(thread_id=thread_id, sender_id=user.id, file_path=file_path)
+    file_size = os.path.getsize(file_path)
+    msg = models.Message(
+        thread_id=thread_id,
+        sender_id=user.id,
+        file_path=file_path,
+        file_name=file.filename,
+        file_size=file_size,
+    )
 
     session.add(msg)
     session.commit()
@@ -621,6 +630,8 @@ async def upload_file(
             "thread_id": thread_id,
             "sender": user.username,
             "file_url": f"/api/files/{msg.id}",
+            "filename": msg.file_name,
+            "file_size": msg.file_size,
         },
     )
 
@@ -642,6 +653,20 @@ def get_file(message_id: int, user=Depends(auth.get_current_user)):
     return FileResponse(msg.file_path, filename=os.path.basename(msg.file_path))
 
 
+@app.get("/api/files/{message_id}/preview")
+def preview_file(message_id: int):
+    session = db.SessionLocal()
+    msg = session.query(models.Message).filter(models.Message.id == message_id).first()
+
+    if not msg or not msg.file_path:
+        session.close()
+        raise HTTPException(404, "File not found")
+
+    session.close()
+
+    return FileResponse(msg.file_path, media_type="image/*")
+
+
 @app.get("/api/messages/{message_id}")
 def get_message(message_id: int, user=Depends(auth.get_current_user)):
     session = db.SessionLocal()
@@ -659,31 +684,6 @@ def get_message(message_id: int, user=Depends(auth.get_current_user)):
         "forward_from_id": msg.forward_from_id,
         "file_path": msg.file_path,
     }
-
-
-@app.post("/api/threads/{thread_id}/read")
-def mark_thread_read(thread_id: int, user=Depends(auth.get_current_user)):
-    session = db.SessionLocal()
-
-    receipts = (
-        session.query(models.MessageReceipt)
-        .join(models.Message)
-        .filter(
-            models.Message.thread_id == thread_id,
-            models.MessageReceipt.user_id == user.id,
-            models.MessageReceipt.read_at.is_(None),
-        )
-        .all()
-    )
-
-    now = datetime.utcnow()
-    for r in receipts:
-        r.read_at = now
-
-    session.commit()
-    session.close()
-
-    return {"status": "ok"}
 
 
 @app.get("/api/chats")
@@ -724,6 +724,72 @@ def get_chat_list(user=Depends(auth.get_current_user)):
                 "is_group": t.is_group,
                 "last_message": last_msg.content if last_msg else None,
                 "last_message_time": last_msg.created_at if last_msg else None,
+            }
+        )
+
+    session.close()
+    return result
+
+
+@app.get("/api/threads/{thread_id}/messages")
+def get_thread_messages(
+    thread_id: int,
+    limit: int = 50,
+    offset: int = 0,
+    user=Depends(auth.get_current_user),
+):
+    session = db.SessionLocal()
+
+    # Ensure membership
+    member = (
+        session.query(models.ThreadMember)
+        .filter_by(thread_id=thread_id, user_id=user.id)
+        .first()
+    )
+    if not member:
+        session.close()
+        raise HTTPException(403, "Not a member of this thread")
+
+    messages = (
+        session.query(models.Message)
+        .options(joinedload(models.Message.sender))
+        .filter(models.Message.thread_id == thread_id)
+        .order_by(models.Message.created_at.asc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    result = []
+    for m in messages:
+        delivered_count = (
+            session.query(models.MessageReceipt)
+            .filter(models.MessageReceipt.message_id == m.id)
+            .filter(models.MessageReceipt.delivered_at.isnot(None))
+            .count()
+        )
+
+        read_count = (
+            session.query(models.MessageReceipt)
+            .filter(models.MessageReceipt.message_id == m.id)
+            .filter(models.MessageReceipt.read_at.isnot(None))
+            .count()
+        )
+        result.append(
+            {
+                "id": m.id,
+                "thread_id": m.thread_id,
+                "sender": m.sender.username if hasattr(m, "sender") else None,
+                "content": m.content,
+                "created_at": m.created_at.isoformat(),
+                "reply_to_id": m.reply_to_id,
+                "forward_from_id": m.forward_from_id,
+                "file_url": f"/api/files/{m.id}" if m.file_path else None,
+                "filename": m.file_name if m.file_path else None,  # 👈 FIX
+                "file_size": m.file_size if m.file_path else None,
+                "type": "file" if m.file_path else "message",
+                "delivered_count": delivered_count,
+                "read_count": read_count,
             }
         )
 

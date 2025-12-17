@@ -52,8 +52,11 @@ class Message(Base):
     reply_to_id = Column(Integer, ForeignKey("messages.id"), nullable=True)
     forward_from_id = Column(Integer, ForeignKey("messages.id"), nullable=True)
     file_path = Column(String, nullable=True)
+    file_size = Column(Integer, nullable=True)
+    file_name = Column(String, nullable=True)
 
     thread = relationship("ChatThread", back_populates="messages")
+    sender = relationship("User")
 
 
 class MessageReceipt(Base):
