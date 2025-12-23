@@ -65,11 +65,20 @@ presence_manager = PresenceManager()
 
 
 def require_thread_admin(session, thread_id: int, user_id: int):
+    thread = session.query(models.ChatThread).filter_by(id=thread_id).first()
+    if not thread:
+        raise HTTPException(404, "Thread not found")
+
+    # 🔹 Personal chats have no admins
+    if not thread.is_group:
+        return
+
     member = (
         session.query(models.ThreadMember)
         .filter_by(thread_id=thread_id, user_id=user_id)
         .first()
     )
+
     if not member or not member.is_admin:
         raise HTTPException(status_code=403, detail="Admin privileges required")
 
@@ -368,12 +377,41 @@ async def create_thread(
     session.add(thread)
     session.commit()
     session.refresh(thread)
+    admin_status = False
+    if data.is_group:
+        admin_status = True
 
-    member = models.ThreadMember(thread_id=thread.id, user_id=user.id, is_admin=True)
+    member = models.ThreadMember(
+        thread_id=thread.id, user_id=user.id, is_admin=admin_status
+    )
     session.add(member)
     session.commit()
 
     return {"id": thread.id, "name": thread.name}
+
+
+@app.get("/api/threads/personal/{user_id}")
+async def get_personal_thread(user_id: int, user=Depends(auth.get_current_user)):
+    session = db.SessionLocal()
+
+    thread = (
+        session.query(models.ChatThread)
+        .join(models.ThreadMember)
+        .filter(
+            models.ChatThread.is_group == False,
+            models.ThreadMember.user_id.in_([user.id, user_id]),
+        )
+        .group_by(models.ChatThread.id)
+        .having(func.count(models.ThreadMember.id) == 2)
+        .first()
+    )
+
+    session.close()
+
+    if not thread:
+        return None
+
+    return {"id": thread.id, "name": thread.name, "is_group": False}
 
 
 @app.post("/api/threads/{thread_id}/read")
@@ -432,12 +470,54 @@ async def add_member(
     thread_id: int, data: schemas.AddMember, user=Depends(auth.get_current_user)
 ):
     session = db.SessionLocal()
+    existing = (
+        session.query(models.ThreadMember)
+        .filter_by(thread_id=thread_id, user_id=data.user_id)
+        .first()
+    )
+
+    if existing:
+        return {"error": "User already in thread"}
+
     m = models.ThreadMember(
         thread_id=thread_id, user_id=data.user_id, is_admin=data.is_admin
     )
     session.add(m)
     session.commit()
+    await presence_manager.send_to_user(
+        data.user_id,
+        {
+            "type": "thread_added",
+            "thread_id": thread_id,
+        },
+    )
+
+    await broadcast_global(
+        {
+            "type": "thread_added",
+            "thread_id": thread_id,
+        }
+    )
+
+    session.close()
     return {"status": "added"}
+
+
+@app.get("/api/threads/{thread_id}/members")
+async def get_thread_members(thread_id: int, user=Depends(auth.get_current_user)):
+    session = db.SessionLocal()
+
+    members = (
+        session.query(models.ThreadMember)
+        .join(models.User)
+        .filter(models.ThreadMember.thread_id == thread_id)
+        .all()
+    )
+
+    return [
+        {"user_id": m.user_id, "username": m.user.username, "is_admin": m.is_admin}
+        for m in members
+    ]
 
 
 @app.post("/api/threads/{thread_id}/leave")
@@ -454,14 +534,28 @@ async def leave_thread(thread_id: int, user=Depends(auth.get_current_user)):
         session.close()
         raise HTTPException(404, "Not a member of this thread")
 
-    target = member.user.username
+    thread = session.query(models.ChatThread).filter_by(id=thread_id).first()
 
+    # 🔐 Group safety
+    if thread.is_group and member.is_admin:
+        admin_count = (
+            session.query(models.ThreadMember)
+            .filter_by(thread_id=thread_id, is_admin=True)
+            .count()
+        )
+
+        if admin_count == 1:
+            session.close()
+            raise HTTPException(400, "You are the only admin. Promote someone first.")
+
+    username = member.user.username
     session.delete(member)
     session.commit()
     session.close()
 
     await thread_manager.broadcast(
-        thread_id, {"system": True, "message": f"{target} left"}
+        thread_id,
+        {"system": True, "message": f"{username} left"},
     )
 
     return {"status": "left thread"}
@@ -474,6 +568,10 @@ async def remove_member(
     user=Depends(auth.get_current_user),
 ):
     session = db.SessionLocal()
+    thread = session.query(models.ChatThread).filter_by(id=thread_id).first()
+    if not thread.is_group:
+        session.close()
+        raise HTTPException(400, "Not a group thread")
 
     require_thread_admin(session, thread_id, user.id)
 
@@ -494,7 +592,12 @@ async def remove_member(
     session.close()
     await thread_manager.broadcast(
         thread_id,
-        {"system": True, "message": f"{user.name} removed {target}"},
+        {
+            "system": True,
+            "message": f"{user.username} removed {target}",
+            "type": "thread_updated",
+            "thread_id": thread_id,
+        },
     )
 
     return {"status": "member removed"}
@@ -507,6 +610,10 @@ async def promote_member(
     user=Depends(auth.get_current_user),
 ):
     session = db.SessionLocal()
+    thread = session.query(models.ChatThread).filter_by(id=thread_id).first()
+    if not thread.is_group:
+        session.close()
+        raise HTTPException(400, "Not a group thread")
     require_thread_admin(session, thread_id, user.id)
 
     member = (
@@ -526,7 +633,12 @@ async def promote_member(
     session.close()
     await thread_manager.broadcast(
         thread_id,
-        {"system": True, "message": f"{target} was promoted to admin"},
+        {
+            "system": True,
+            "message": f"{target} was promoted to admin",
+            "type": "thread_updated",
+            "thread_id": thread_id,
+        },
     )
 
     return {"status": "promoted"}
@@ -539,6 +651,10 @@ async def demote_member(
     user=Depends(auth.get_current_user),
 ):
     session = db.SessionLocal()
+    thread = session.query(models.ChatThread).filter_by(id=thread_id).first()
+    if not thread.is_group:
+        session.close()
+        raise HTTPException(400, "Not a group thread")
     require_thread_admin(session, thread_id, user.id)
 
     member = (
@@ -558,7 +674,12 @@ async def demote_member(
     session.close()
     await thread_manager.broadcast(
         thread_id,
-        {"system": True, "message": f"{target} was removed from admin"},
+        {
+            "system": True,
+            "message": f"{target} was removed from admin",
+            "type": "thread_updated",
+            "thread_id": thread_id,
+        },
     )
 
     return {"status": "demoted"}
@@ -586,7 +707,7 @@ def get_online_users(current_user=Depends(auth.get_current_user)):
 
     users = (
         session.query(models.User)
-        .filter(models.User.id.in_(presence_manager.list_online_users()))
+        # .filter(models.User.id.in_(presence_manager.list_online_users()))
         .all()
     )
 
@@ -686,6 +807,34 @@ def get_message(message_id: int, user=Depends(auth.get_current_user)):
     }
 
 
+@app.get("/api/threads/{thread_id}")
+async def get_thread(thread_id: int, user=Depends(auth.get_current_user)):
+    session = db.SessionLocal()
+
+    # ensure user is a member
+    member = (
+        session.query(models.ThreadMember)
+        .filter_by(thread_id=thread_id, user_id=user.id)
+        .first()
+    )
+
+    if not member:
+        session.close()
+        raise HTTPException(403, "Not a member of this thread")
+
+    thread = session.query(models.ChatThread).filter_by(id=thread_id).first()
+    session.close()
+
+    if not thread:
+        raise HTTPException(404, "Thread not found")
+
+    return {
+        "id": thread.id,
+        "name": thread.name,
+        "is_group": thread.is_group,
+    }
+
+
 @app.get("/api/chats")
 def get_chat_list(user=Depends(auth.get_current_user)):
     session = db.SessionLocal()
@@ -717,13 +866,41 @@ def get_chat_list(user=Depends(auth.get_current_user)):
             .first()
         )
 
+        unread_count = (
+            session.query(models.MessageReceipt)
+            .join(models.Message)
+            .filter(
+                models.Message.thread_id == t.thread_id,
+                models.MessageReceipt.user_id == user.id,
+                models.MessageReceipt.read_at.is_(None),
+            )
+            .count()
+        )
+
+        if not t.is_group:
+            other = (
+                session.query(models.User)
+                .join(models.ThreadMember)
+                .filter(
+                    models.ThreadMember.thread_id == t.thread_id,
+                    models.User.id != user.id,
+                )
+                .first()
+            )
+            name = other.username if other else "Chat"
+        else:
+            name = t.thread_name
+
         result.append(
             {
                 "thread_id": t.thread_id,
-                "name": t.thread_name,
+                "name": name,
                 "is_group": t.is_group,
                 "last_message": last_msg.content if last_msg else None,
-                "last_message_time": last_msg.created_at if last_msg else None,
+                "last_message_time": last_msg.created_at.isoformat()
+                if last_msg
+                else None,
+                "unread_count": unread_count,
             }
         )
 

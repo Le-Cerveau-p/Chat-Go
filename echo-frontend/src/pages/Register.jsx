@@ -2,8 +2,9 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import "./auth.css";
 
-export default function Login() {
+export default function Register() {
   const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const navigate = useNavigate();
@@ -12,30 +13,25 @@ export default function Login() {
     e.preventDefault();
     setError("");
 
-    const form = new URLSearchParams();
-    form.append("username", username);
-    form.append("password", password);
-
-    const res = await fetch("http://localhost:8000/api/token", {
+    const res = await fetch("http://localhost:8000/api/register", {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, email, password }),
     });
 
     if (!res.ok) {
-      setError("Invalid username or password");
+      const data = await res.json();
+      setError(data.detail || "Registration failed");
       return;
     }
 
-    const data = await res.json();
-    localStorage.setItem("token", data.access_token);
-    navigate("/");
+    navigate("/login");
   }
 
   return (
     <div className="auth-page">
       <form className="auth-card" onSubmit={handleSubmit}>
-        <div className="auth-title">Echo Login</div>
+        <div className="auth-title">Create Account</div>
 
         {error && <div className="auth-error">{error}</div>}
 
@@ -48,6 +44,13 @@ export default function Login() {
 
         <input
           className="auth-input"
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+
+        <input
+          className="auth-input"
           type="password"
           placeholder="Password"
           value={password}
@@ -55,11 +58,11 @@ export default function Login() {
         />
 
         <button className="auth-btn" type="submit">
-          Login
+          Register
         </button>
 
         <div className="auth-switch">
-          Don’t have an account? <Link to="/register">Sign up</Link>
+          Already have an account? <Link to="/login">Login</Link>
         </div>
       </form>
     </div>

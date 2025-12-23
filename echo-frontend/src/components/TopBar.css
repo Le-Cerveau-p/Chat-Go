@@ -1,0 +1,16 @@
+.topbar {
+    height: 56px;
+    background: #111827;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    border-bottom: 1px solid #1f2937;
+}
+
+.back-btn {
+    background: none;
+    border: none;
+    color: #c4b5fd;
+    font-size: 20px;
+    cursor: pointer;
+}

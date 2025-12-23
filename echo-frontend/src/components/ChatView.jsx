@@ -1,139 +1,85 @@
 import { useEffect, useRef, useState } from "react";
 import { connectChatSocket } from "../ws/chatSocket";
 import "../components/chat.css";
-import { useParams } from "react-router-dom";
 
-
-
-export const truncate = (text, max = 20) => {
-  if (!text) return "";
-  return text.length > max ? text.slice(0, max) + "..." : text;
-};
+export const truncate = (text, max = 20) =>
+  !text ? "" : text.length > max ? text.slice(0, max) + "..." : text;
 
 export const formatFileSize = (bytes) => {
   if (!bytes) return "";
   const sizes = ["B", "KB", "MB", "GB"];
-  let i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
   return (bytes / Math.pow(1024, i)).toFixed(1) + " " + sizes[i];
 };
 
 export const isImage = (filename) =>
   /\.(jpg|jpeg|png|gif|webp)$/i.test(filename);
 
-
-export default function Chat({}) {
-  const { id: threadId } = useParams();
-  
-  if (!threadId) {
-    return (
-      <div className="chat-empty">
-        Select a chat to start messaging
-      </div>
-    );
-  }
+export default function ChatView({ threadId, onRead }) {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [typingUsers, setTypingUsers] = useState({});
-  const [readReceipts, setReadReceipts] = useState({});
   const [me, setMe] = useState(null);
   const [dragActive, setDragActive] = useState(false);
-  const dragCounter = useRef(0);
+  const [uploads, setUploads] = useState([]);
+  const [showInfo, setShowInfo] = useState(false);
+
   const wsRef = useRef(null);
-  const messagesEndRef = useRef(null); 
-  let typingTimeout = useRef(null);
+  const messagesEndRef = useRef(null);
+  const dragCounter = useRef(0);
   const fileInputRef = useRef(null);
-  const displayName = `Thread ${threadId}`;
+
+  const token = localStorage.getItem("token");
 
 
-  const token = localStorage.getItem("token");const [uploads, setUploads] = useState([]);
-  
-  /*
-  uploads = [
-    {
-      id,
-      file,
-      progress,
-      xhr
-    }
-  ]
-  */
-
+  /* ---------------- EFFECTS ---------------- */
 
   useEffect(() => {
     if (!threadId) return;
+
     async function loadMe() {
       const res = await fetch("http://localhost:8000/api/me", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       });
-  
-      const data = await res.json();
-      setMe(data);
+      setMe(await res.json());
     }
-  
-    loadMe();
+
+    
 
     async function loadHistory() {
       const res = await fetch(
-        `http://localhost:8000/api/threads/${ threadId }/messages`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
+        `http://localhost:8000/api/threads/${threadId}/messages`,
+        { headers: { Authorization: `Bearer ${token}` } }
       );
-      const data = await res.json();
-      setMessages(data);
-
-      await fetch(`http://localhost:8000/api/threads/${ threadId }/read`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      setMessages(await res.json());
     }
-  
+
+    loadMe();
     loadHistory();
-    fetch(`http://localhost:8000/api/threads/${ threadId }/read`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    
 
     const ws = connectChatSocket(token, (data) => {
       if (data.type === "message" || data.type === "file" || data.system) {
-        setMessages((m) => [...m, data]);
+        setMessages((prev) => [...prev, data]);
       }
 
       if (data.type === "read") {
         setMessages((prev) =>
-          prev.map((m) => {
-            // Only update messages I sent
-            if (m.sender === me?.username) {
-              return {
-                ...m,
-                read_count: (m.read_count || 0) + 1,
-              };
-            }
-            return m;
-          })
+          prev.map((m) =>
+            m.sender === me?.username
+              ? { ...m, read_count: (m.read_count || 0) + 1 }
+              : m
+          )
         );
       }
-      
 
       if (data.type === "typing") {
         setTypingUsers((prev) => {
           const next = { ...prev };
-    
           if (data.is_typing) {
             next[data.user_id] = data.username;
           } else {
             delete next[data.user_id];
           }
-    
           return next;
         });
       }
@@ -142,30 +88,42 @@ export default function Chat({}) {
     wsRef.current = ws;
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ action: "join", thread_id: threadId}));
+      ws.send(JSON.stringify({ action: "join", thread_id: threadId }));
     };
 
     return () => ws.close();
-  }, [token, threadId]);
+  }, [threadId, token]);
+
+  useEffect(() => {
+    if (!threadId) return;
+
+    // Tell backend
+    fetch(`http://localhost:8000/api/threads/${threadId}/read`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    // Tell Layout (local UI update)
+    onRead?.(threadId);
+  }, [threadId]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-  
+
+  /* ---------------- ACTIONS ---------------- */
 
   const sendMessage = () => {
-    if (!text.trim() || !wsRef.current) return;
-
-    wsRef.current.send(
+    if (!text.trim()) return;
+    wsRef.current?.send(
       JSON.stringify({
         action: "message",
         thread_id: threadId,
         content: text,
       })
     );
-
     setText("");
   };
-
 
   const startUpload = (file) => {
     const id = crypto.randomUUID();
@@ -284,110 +242,94 @@ export default function Chat({}) {
     window.URL.revokeObjectURL(downloadUrl);
   };
   
-  
+
+  /* ---------------- UI ---------------- */
 
   return (
     <div className="chat-container" 
-    onDragEnter={onDragEnter}
-    onDragLeave={onDragLeave}
-    onDragOver={onDragOver}
-    onDrop={onDrop}>
-      {dragActive && (<div className="drag-overlay">Drop files to upload</div>)}
-
-      <h2 className="thread-title">{displayName}</h2>
+      onDragEnter={onDragEnter}
+      onDragLeave={onDragLeave}
+      onDragOver={onDragOver}
+      onDrop={onDrop}>
+        {dragActive && (
+          <div className="drag-overlay">Drop files to upload</div>
+        )}
+      {/* <h2 className="thread-title">{displayName}</h2> */}
 
       <div className="messages">
         {messages.map((m, i) => (
-          <div key={i} className={m.system ? "system" : "message"}>
-          {!m.system && (
-            <>
-              <span className="sender">{m.sender}</span>
+          <div key={i} className={m.system ? "system" : `message ${m.sender === me?.username ? "me" : "other"}`}>
+            {!m.system && (
+              <>
+                <span className="sender">{m.sender}</span>
+                {m.type === "file" ? (
+                  <div className="file-message">
+                    {isImage(m.filename) ? (
+                      <img
+                        src={`http://localhost:8000${m.file_url}/preview`}
+                        className="image-preview"
+                        onClick={() => downloadFile(m.file_url, m.filename)}
+                      />
+                    ) : (
+                      <span
+                        className="file-link"
+                        onClick={() => downloadFile(m.file_url, m.filename)}
+                        title={m.filename}
+                      >
+                        {truncate(m.filename)}
+                      </span>
+                    )}
 
-              {m.type === "file" ? (
-                <div className="file-message">
-                  <span className="file-icon">📎</span>
-
-                  {isImage(m.filename) ? (
-                    <img
-                      src={`http://localhost:8000${m.file_url}/preview`}
-                      alt={m.filename}
-                      className="image-preview"
-                      onClick={() => downloadFile(m.file_url, m.filename)}
-                    />
-                  ) : (
-                    <span
-                      className="file-link"
-                      onClick={() => downloadFile(m.file_url, m.filename)}
-                      title={m.filename}
-                    >
-                      {truncate(m.filename, 20)}
-                    </span>
-                  )}
-
-                  <div className="file-meta">
-                    <span className="file-size">
+                    <div className="file-meta">
                       {formatFileSize(m.file_size)}
-                    </span>
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <span className="content">{m.content}</span>
-              )}
-        
-              {m.sender === me?.username && (
-                <span className="receipt">
-                  {m.read_count > 0 ? "✓✓" : m.delivered_count > 0 ? "✓" : ""}
-                </span>
-              )}
-            </>
-          )}
+                ) : (
+                  <span className="content">{m.content}</span>
+                )}
+
+                {m.sender === me?.username && (
+                  <span className="receipt">
+                    {m.read_count > 0 ? "✓✓" : "✓"}
+                  </span>
+                )}
+              </>
+            )}
           </div>
-        
         ))}
         <div ref={messagesEndRef} />
-
       </div>
-      {Object.values(typingUsers).length > 0 && (
-      <div className="typing-indicator">
-        {Object.values(typingUsers).join(", ")} typing...
-      </div>
+      {Object.values(typingUsers)
+        .filter((username) => username !== me?.username).length > 0 && (
+          <div className="typing-indicator">
+            {Object.values(typingUsers)
+              .filter((username) => username !== me?.username)
+              .join(", ")}{" "}
+            typing...
+          </div>
       )}
 
       {uploads.length > 0 && (
         <div className="upload-list">
           {uploads.map((u) => (
             <div key={u.id} className="upload-item">
-              <span className="upload-name">
-                {truncate(u.file.name, 20)}
-              </span>
-
+              <span>{truncate(u.file.name)}</span>
               <div className="upload-bar">
                 <div
                   className="upload-bar-fill"
                   style={{ width: `${u.progress}%` }}
                 />
               </div>
-
-              <span className="upload-percent">
-                {u.progress}%
-              </span>
-
-              <button
-                className="upload-cancel"
-                onClick={() => cancelUpload(u.id)}
-              >
-                ✕
-              </button>
+              <button onClick={() => cancelUpload(u.id)}>✕</button>
             </div>
           ))}
         </div>
       )}
 
-    
       <div className="input-bar">
         <input
           value={text}
-          onChange={(e) => {setText(e.target.value);
+          onChange={(e) => {setText(e.target.value); 
             wsRef.current?.send(
               JSON.stringify({
                 action: "typing_start",
@@ -403,6 +345,7 @@ export default function Chat({}) {
               })
             )
           }
+
           placeholder="Type a message..."
           onKeyDown={(e) => e.key === "Enter" && sendMessage()}
         />
@@ -410,7 +353,7 @@ export default function Chat({}) {
           type="file"
           ref={fileInputRef}
           multiple
-          style={{ display: "none" }}
+          hidden
           onChange={(e) => {
             Array.from(e.target.files).forEach(startUpload);
             e.target.value = "";
@@ -420,7 +363,6 @@ export default function Chat({}) {
         <button onClick={() => fileInputRef.current.click()}>
           📎
         </button>
-
         <button onClick={sendMessage}>Send</button>
       </div>
     </div>

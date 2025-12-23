@@ -1,4 +1,5 @@
 from fastapi import WebSocket
+import json
 
 
 class PresenceManager:
@@ -20,3 +21,11 @@ class PresenceManager:
 
     def list_online_users(self):
         return list(self.online_users.keys())
+
+    async def send_to_user(self, user_id: int, message: dict):
+        sockets = self.online_users.get(user_id, set())
+        for ws in list(sockets):
+            try:
+                await ws.send_text(json.dumps(message))
+            except RuntimeError:
+                sockets.discard(ws)

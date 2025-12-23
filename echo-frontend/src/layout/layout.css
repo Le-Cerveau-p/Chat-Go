@@ -1,0 +1,163 @@
+/* RESET */
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body,
+#root {
+    height: 100%;
+}
+
+
+/* APP SHELL */
+
+.app-shell {
+    display: flex;
+    height: 100vh;
+    background: #0b0b12;
+    color: white;
+    width: 100vw;
+}
+
+
+/* SIDEBAR */
+
+.sidebar {
+    width: 300px;
+    background: #020617;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid #1e293b;
+}
+
+.sidebar-header {
+    padding: 16px;
+    font-weight: bold;
+    font-size: 20px;
+    color: #a855f7;
+    cursor: pointer;
+}
+
+.chat-search {
+    margin: 8px;
+    padding: 8px;
+    border-radius: 6px;
+    border: none;
+    background: #111827;
+    color: white;
+}
+
+.new-group {
+    color: #a855f7;
+}
+
+
+/* SIDEBAR FOOTER */
+
+.sidebar-footer {
+    padding: 12px;
+    border-top: 1px solid #1e293b;
+}
+
+.profile {
+    cursor: pointer;
+}
+
+
+/* MAIN CONTENT */
+
+.main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+
+/* TOP BAR */
+
+.top-bar {
+    height: 56px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 16px;
+    border-bottom: 1px solid #1e293b;
+}
+
+.hamburger {
+    display: none;
+    background: none;
+    border: none;
+    color: white;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 5px;
+}
+
+
+/* CHAT AREA */
+
+.page-content {
+    flex: 1;
+    display: flex;
+    min-width: 0;
+}
+
+.chat-placeholder {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #9ca3af;
+    font-size: 18px;
+}
+
+.thread-title {
+    cursor: pointer;
+}
+
+.top-bar-title {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.top-bar-title:hover {
+    opacity: 0.85;
+}
+
+.check-box {
+    margin-right: 5px;
+}
+
+.online-user.clickable {
+    cursor: pointer;
+}
+
+.online-user.clickable:hover {
+    background: rgba(124, 58, 237, 0.15);
+}
+
+
+/* MOBILE */
+
+@media (max-width: 768px) {
+    .sidebar {
+        position: fixed;
+        left: -300px;
+        top: 0;
+        bottom: 0;
+        z-index: 20;
+        transition: left 0.25s ease;
+    }
+    .sidebar.open {
+        left: 0;
+    }
+    .hamburger {
+        display: block;
+    }
+}

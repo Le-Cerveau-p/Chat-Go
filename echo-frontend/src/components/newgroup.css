@@ -1,0 +1,29 @@
+.modal-input {
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 12px;
+    background: #120a1f;
+    border: 1px solid #7c3aed;
+    color: white;
+    border-radius: 6px;
+}
+
+.user-list {
+    max-height: 200px;
+    overflow-y: auto;
+    margin-bottom: 16px;
+}
+
+.user-item {
+    padding: 8px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.user-item:hover {
+    background: #1a102b;
+}
+
+.user-item.selected {
+    background: #7c3aed;
+}
