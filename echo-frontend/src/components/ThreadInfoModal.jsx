@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import AddMembersModal from "./AddMembersModal";
 
-export default function ThreadInfoModal({ threadId, onClose, me }) {
+export default function ThreadInfoModal({ threadId, onClose, me, onDissolved }) {
   const [thread, setThread] = useState(null);
   const [members, setMembers] = useState([]);
   const [onlineUsers, setOnlineUsers] = useState([]);
@@ -12,6 +12,28 @@ export default function ThreadInfoModal({ threadId, onClose, me }) {
   const isAdmin = members.some(
     (m) => m.user_id === me?.id && m.is_admin
   );
+
+  async function dissolveGroup() {
+    const confirmed = window.confirm(
+      "This will permanently delete the group for ALL members. Continue?"
+    );
+
+    if (!confirmed) return;
+
+    const res = await fetch(
+      `http://localhost:8000/api/threads/${threadId}/dissolve`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    );
+
+    if (res.ok) {
+      onDissolved?.();
+    } else {
+      alert("Failed to dissolve group");
+    }
+  }
 
   async function refreshMembers() {
     const res = await fetch(
@@ -143,6 +165,15 @@ export default function ThreadInfoModal({ threadId, onClose, me }) {
             }}
           >
             Leave group
+          </button>
+        )}
+
+        {thread?.is_group && isAdmin && (
+          <button
+            className="danger full"
+            onClick={dissolveGroup}
+          >
+            Dissolve group
           </button>
         )}
 

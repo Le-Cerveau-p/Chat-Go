@@ -314,6 +314,13 @@ async def chat_socket(websocket: WebSocket):
                     },
                 )
 
+                await broadcast_global(
+                    {
+                        "type": "message",
+                        "thread_id": thread_id,
+                    }
+                )
+
             elif data["action"] == "typing_start":
                 thread_id = data["thread_id"]
 
@@ -683,6 +690,67 @@ async def demote_member(
     )
 
     return {"status": "demoted"}
+
+
+@app.post("/api/threads/{thread_id}/dissolve")
+async def dissolve_thread(
+    thread_id: int,
+    user=Depends(auth.get_current_user),
+):
+    session = db.SessionLocal()
+
+    thread = session.query(models.ChatThread).filter_by(id=thread_id).first()
+
+    if not thread:
+        session.close()
+        raise HTTPException(404, "Thread not found")
+
+    if not thread.is_group:
+        session.close()
+        raise HTTPException(400, "Not a group thread")
+
+    # ✅ Only admins can dissolve
+    require_thread_admin(session, thread_id, user.id)
+
+    # Collect members BEFORE deletion (for WS broadcast)
+    members = session.query(models.ThreadMember).filter_by(thread_id=thread_id).all()
+
+    member_ids = [m.user_id for m in members]
+
+    # 🧹 Delete messages
+    session.query(models.Message).filter_by(thread_id=thread_id).delete()
+
+    # 🧹 Delete members
+    session.query(models.ThreadMember).filter_by(thread_id=thread_id).delete()
+
+    # 🧹 Delete thread
+    session.delete(thread)
+
+    session.commit()
+    session.close()
+
+    # 🔔 Notify all members
+    # for uid in member_ids:
+    #     await thread_manager.send_to_user(
+    #         uid,
+    #         {
+    #             "system": True,
+    #             "type": "thread_removed",
+    #             "thread_id": thread_id,
+    #             "message": "This group has been dissolved by an admin",
+    #         },
+    #     )
+
+    await broadcast_global(
+        {
+            "system": True,
+            "type": "thread_removed",
+            "thread_id": thread_id,
+            "message": "This group has been dissolved by an admin",
+        }
+    )
+
+    return {"status": "dissolved"}
 
 
 @app.post("/api/messages")

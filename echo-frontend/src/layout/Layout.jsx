@@ -18,7 +18,7 @@ export default function Layout() {
   const markThreadRead = (threadId) => {
     setChats(prev =>
       prev.map(chat =>
-        chat.id === threadId
+        chat.thread_id === threadId
           ? { ...chat, unread_count: 0 }
           : chat
       )
@@ -30,9 +30,9 @@ export default function Layout() {
 
     setChats(prev => {
       const updated = prev.map(chat => {
-        if (chat.id !== data.thread_id) return chat;
+        if (chat.thread_id !== data.thread_id) return chat;
 
-        const isActive = activeChat?.id === chat.id;
+        const isActive = activeChat?.id === chat.thread_id;
 
         return {
           ...chat,
@@ -48,32 +48,6 @@ export default function Layout() {
         (a, b) =>
           new Date(b.last_message_at || 0) -
           new Date(a.last_message_at || 0)
-      );
-    });
-  };
-
-  const handleIncomingMessage = (data) => {
-    setChats(prev => {
-      const updated = prev.map(chat => {
-        if (chat.thread_id !== data.thread_id) return chat;
-
-        const isActive = activeChat?.thread_id === chat.thread_id;
-
-        return {
-          ...chat,
-          last_message: data.content || "📎 File",
-          last_message_time: data.created_at,
-          unread_count: isActive
-            ? 0
-            : (chat.unread_count || 0) + 1,
-        };
-      });
-      console.log('rann')
-
-      // move updated chat to top
-      return updated.sort(
-        (a, b) => 
-          new Date(b.last_message_time || 0) - new Date(a.last_message_time || 0)
       );
     });
   };
@@ -188,11 +162,22 @@ export default function Layout() {
       const data = JSON.parse(event.data);
 
       if (data.type === "message" || data.type === "file") {
-        handleIncomingMessage(data);
+        // updateSidebarFromMessage(data);
+        refreshChats()
       }
 
       if (data.type === "thread_added") {
         refreshChats();
+      }
+
+      if (data.type === "thread_removed") {
+        setChats(prev =>
+          prev.filter(c => c.thread_id !== data.thread_id)
+        );
+
+        if (activeChat?.thread_id === data.thread_id) {
+          setActiveChat(null);
+        }
       }
     };
 
@@ -255,6 +240,11 @@ export default function Layout() {
           threadId={activeChat.thread_id ?? activeChat.id}
           me={me}
           onClose={() => setShowThreadInfo(false)}
+          onDissolved={() => {
+            setShowThreadInfo(false);
+            setActiveChat(null);
+            refreshChats();
+          }}
         />
       )}
     </div>

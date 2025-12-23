@@ -11,12 +11,13 @@ export default function Sidebar({ open, chats, activeChat, onSelectChat, me, ope
   );
   const sortedChats = [...filteredChats].sort(
   (a, b) =>
-    new Date(b.last_message_time || 0) -
-    new Date(a.last_message_time || 0)
+    new Date(b.last_message_at || 0) -
+    new Date(a.last_message_at || 0)
   );
   const [showOnline, setShowOnline] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showNewGroup, setShowNewGroup] = useState(false);
+  
 
   return (
     <>
