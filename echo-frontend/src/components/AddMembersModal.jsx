@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { API_BASE, WS_BASE } from "../config";
 
 export default function AddMembersModal({
   threadId,
@@ -25,7 +26,7 @@ export default function AddMembersModal({
   const addMembers = async () => {
     for (const userId of selected) {
       await fetch(
-        `http://localhost:8000/api/threads/${threadId}/members`,
+        `${API_BASE}/api/threads/${threadId}/members`,
         {
           method: "POST",
           headers: {

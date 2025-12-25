@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { API_BASE, WS_BASE } from "../config";
 import AddMembersModal from "./AddMembersModal";
 
 export default function ThreadInfoModal({ threadId, onClose, me, onDissolved }) {
@@ -21,7 +22,7 @@ export default function ThreadInfoModal({ threadId, onClose, me, onDissolved }) 
     if (!confirmed) return;
 
     const res = await fetch(
-      `http://localhost:8000/api/threads/${threadId}/dissolve`,
+      `${API_BASE}/api/threads/${threadId}/dissolve`,
       {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
@@ -37,7 +38,7 @@ export default function ThreadInfoModal({ threadId, onClose, me, onDissolved }) 
 
   async function refreshMembers() {
     const res = await fetch(
-      `http://localhost:8000/api/threads/${threadId}/members`,
+      `${API_BASE}/api/threads/${threadId}/members`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     if (res.ok) setMembers(await res.json());
@@ -45,7 +46,7 @@ export default function ThreadInfoModal({ threadId, onClose, me, onDissolved }) 
 
   async function promote(userId) {
     await fetch(
-      `http://localhost:8000/api/threads/${threadId}/promote`,
+      `${API_BASE}/api/threads/${threadId}/promote`,
       {
         method: "POST",
         headers: {
@@ -60,7 +61,7 @@ export default function ThreadInfoModal({ threadId, onClose, me, onDissolved }) 
 
   async function demote(userId) {
     await fetch(
-      `http://localhost:8000/api/threads/${threadId}/demote`,
+      `${API_BASE}/api/threads/${threadId}/demote`,
       {
         method: "POST",
         headers: {
@@ -75,7 +76,7 @@ export default function ThreadInfoModal({ threadId, onClose, me, onDissolved }) 
 
   async function remove(userId) {
     await fetch(
-      `http://localhost:8000/api/threads/${threadId}/remove`,
+      `${API_BASE}/api/threads/${threadId}/remove`,
       {
         method: "POST",
         headers: {
@@ -91,13 +92,13 @@ export default function ThreadInfoModal({ threadId, onClose, me, onDissolved }) 
   useEffect(() => {
     async function load() {
       const [t, m, o] = await Promise.all([
-        fetch(`http://localhost:8000/api/threads/${threadId}`, {
+        fetch(`${API_BASE}/api/threads/${threadId}`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
-        fetch(`http://localhost:8000/api/threads/${threadId}/members`, {
+        fetch(`${API_BASE}/api/threads/${threadId}/members`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
-        fetch(`http://localhost:8000/api/online-users`, {
+        fetch(`${API_BASE}/api/online-users`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
       ]);
@@ -155,7 +156,7 @@ export default function ThreadInfoModal({ threadId, onClose, me, onDissolved }) 
             className="danger full"
             onClick={async () => {
               await fetch(
-                `http://localhost:8000/api/threads/${threadId}/leave`,
+                `${API_BASE}/api/threads/${threadId}/leave`,
                 {
                   method: "POST",
                   headers: { Authorization: `Bearer ${token}` },

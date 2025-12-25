@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { API_BASE, WS_BASE } from "../config";
 import "../components/newgroup.css";
 
 export default function NewGroupModal({ onClose, onCreated }) {
@@ -9,7 +10,7 @@ export default function NewGroupModal({ onClose, onCreated }) {
   const token = localStorage.getItem("token");
 
   useEffect(() => {
-    fetch("http://localhost:8000/api/online-users", {
+    fetch(`${API_BASE}/api/online-users`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -33,7 +34,7 @@ export default function NewGroupModal({ onClose, onCreated }) {
     }
 
     // 1️⃣ Create thread
-    const res = await fetch("http://localhost:8000/api/threads", {
+    const res = await fetch(`${API_BASE}/api/threads`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -55,7 +56,7 @@ export default function NewGroupModal({ onClose, onCreated }) {
     // 2️⃣ Add members
     for (const user of selected) {
       await fetch(
-        `http://localhost:8000/api/threads/${thread.id}/members`,
+        `${API_BASE}/api/threads/${thread.id}/members`,
         {
           method: "POST",
           headers: {

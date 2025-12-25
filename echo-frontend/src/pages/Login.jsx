@@ -1,6 +1,9 @@
 import { useState } from "react";
+import { API_BASE, WS_BASE } from "../config";
 import { useNavigate, Link } from "react-router-dom";
 import "./auth.css";
+
+console.log(import.meta.env.VITE_API_BASE);
 
 export default function Login() {
   const [username, setUsername] = useState("");
@@ -16,7 +19,7 @@ export default function Login() {
     form.append("username", username);
     form.append("password", password);
 
-    const res = await fetch("http://localhost:8000/api/token", {
+    const res = await fetch(`${API_BASE}/api/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: form,

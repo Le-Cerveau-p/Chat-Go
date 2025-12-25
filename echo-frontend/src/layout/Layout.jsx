@@ -1,4 +1,5 @@
 import { useEffect,useState, useCallback } from "react";
+import { API_BASE, WS_BASE } from "../config";
 import Sidebar from "../components/Sidebar";
 import ChatView from "../components/ChatView";
 import ChatPlaceholder from "../components/ChatPlaceholder";
@@ -25,36 +26,10 @@ export default function Layout() {
     );
   };
 
-  const updateSidebarFromMessage = (data) => {
-    console.log("sidebar update");
-
-    setChats(prev => {
-      const updated = prev.map(chat => {
-        if (chat.thread_id !== data.thread_id) return chat;
-
-        const isActive = activeChat?.id === chat.thread_id;
-
-        return {
-          ...chat,
-          last_message: data.content || "📎 File",
-          last_message_at: data.created_at,
-          unread_count: isActive
-            ? 0
-            : (chat.unread_count || 0) + 1,
-        };
-      });
-
-      return updated.sort(
-        (a, b) =>
-          new Date(b.last_message_at || 0) -
-          new Date(a.last_message_at || 0)
-      );
-    });
-  };
 
   useEffect(() => {
     async function loadMe() {
-      const res = await fetch("http://localhost:8000/api/me", {
+      const res = await fetch(`${API_BASE}/api/me`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -72,7 +47,7 @@ export default function Layout() {
   const openPersonalChat = async (user) => {
     // 1. check if personal thread exists
     const res = await fetch(
-      `http://localhost:8000/api/threads/personal/${user.id}`,
+      `${API_BASE}/api/threads/personal/${user.id}`,
       {
         headers: { Authorization: `Bearer ${token}` },
       }
@@ -82,7 +57,7 @@ export default function Layout() {
 
     // 2. if not, create it
     if (!thread) {
-      const createRes = await fetch("http://localhost:8000/api/threads", {
+      const createRes = await fetch(`${API_BASE}/api/threads`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -98,7 +73,7 @@ export default function Layout() {
 
       // add the other user
       await fetch(
-        `http://localhost:8000/api/threads/${thread.id}/members`,
+        `${API_BASE}/api/threads/${thread.id}/members`,
         {
           method: "POST",
           headers: {
@@ -122,7 +97,7 @@ export default function Layout() {
 
   useEffect(() => {
     async function loadChats() {
-      const res = await fetch("http://localhost:8000/api/chats", {
+      const res = await fetch(`${API_BASE}/api/chats`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -139,7 +114,7 @@ export default function Layout() {
 
   
   const refreshChats = useCallback(async () => {
-    const res = await fetch("http://localhost:8000/api/chats", {
+    const res = await fetch(`${API_BASE}/api/chats`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -155,7 +130,7 @@ export default function Layout() {
     if (!token) return;
 
     const ws = new WebSocket(
-      `ws://localhost:8000/ws/chat?token=${token}`
+      `${WS_BASE}/ws/chat?token=${token}`
     );
 
     ws.onmessage = (event) => {

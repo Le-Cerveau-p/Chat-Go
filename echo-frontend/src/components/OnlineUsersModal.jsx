@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { API_BASE, WS_BASE } from "../config";
 
 export default function OnlineUsersModal({ onClose, onSelectUser }) {
   const [users, setUsers] = useState([]);
@@ -6,7 +7,7 @@ export default function OnlineUsersModal({ onClose, onSelectUser }) {
 
   useEffect(() => {
     async function loadOnline() {
-      const res = await fetch("http://localhost:8000/api/online-users", {
+      const res = await fetch(`${API_BASE}/api/online-users`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },

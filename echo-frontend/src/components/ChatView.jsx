@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { API_BASE, WS_BASE } from "../config";
 import { connectChatSocket } from "../ws/chatSocket";
 import "../components/chat.css";
+// import { truncate, formatFileSize, isImage } from "./File"
 
 export const truncate = (text, max = 20) =>
   !text ? "" : text.length > max ? text.slice(0, max) + "..." : text;
@@ -33,12 +35,20 @@ export default function ChatView({ threadId, onRead }) {
 
 
   /* ---------------- EFFECTS ---------------- */
+  useEffect(() => {
+    const beforeUnload = () => {
+      console.log("PAGE IS RELOADING");
+    };
+
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => window.removeEventListener("beforeunload", beforeUnload);
+  }, []);
 
   useEffect(() => {
     if (!threadId) return;
 
     async function loadMe() {
-      const res = await fetch("http://localhost:8000/api/me", {
+      const res = await fetch(`${API_BASE}/api/me`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setMe(await res.json());
@@ -48,7 +58,7 @@ export default function ChatView({ threadId, onRead }) {
 
     async function loadHistory() {
       const res = await fetch(
-        `http://localhost:8000/api/threads/${threadId}/messages`,
+        `${API_BASE}/api/threads/${threadId}/messages`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       setMessages(await res.json());
@@ -98,7 +108,7 @@ export default function ChatView({ threadId, onRead }) {
     if (!threadId) return;
 
     // Tell backend
-    fetch(`http://localhost:8000/api/threads/${threadId}/read`, {
+    fetch(`${API_BASE}/api/threads/${threadId}/read`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -126,7 +136,7 @@ export default function ChatView({ threadId, onRead }) {
   };
 
   const startUpload = (file) => {
-    const id = crypto.randomUUID();
+    const id = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const xhr = new XMLHttpRequest();
   
     const uploadItem = {
@@ -143,7 +153,7 @@ export default function ChatView({ threadId, onRead }) {
   
     xhr.open(
       "POST",
-      `http://localhost:8000/api/threads/${ threadId }/upload`
+      `${API_BASE}/api/threads/${ threadId }/upload`
     );
   
     xhr.setRequestHeader(
@@ -218,7 +228,7 @@ export default function ChatView({ threadId, onRead }) {
   
 
   const downloadFile = async (url, filename) => {
-    const res = await fetch(`http://localhost:8000${url}`, {
+    const res = await fetch(`${API_BASE}${url}`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -266,7 +276,7 @@ export default function ChatView({ threadId, onRead }) {
                   <div className="file-message">
                     {isImage(m.filename) ? (
                       <img
-                        src={`http://localhost:8000${m.file_url}/preview`}
+                        src={`${API_BASE}${m.file_url}/preview`}
                         className="image-preview"
                         onClick={() => downloadFile(m.file_url, m.filename)}
                       />
@@ -360,7 +370,7 @@ export default function ChatView({ threadId, onRead }) {
           }}
         />
 
-        <button onClick={() => fileInputRef.current.click()}>
+        <button type="button" onClick={() => fileInputRef.current.click()}>
           📎
         </button>
         <button onClick={sendMessage}>Send</button>

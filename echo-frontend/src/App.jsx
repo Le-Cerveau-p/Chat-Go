@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Layout from "./layout/Layout";
-import Chat from "./pages/Chat";
+import ChatView from "./components/ChatView";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 
@@ -46,7 +46,7 @@ export default function App() {
           }
         >
           <Route path="/" element={<div className="empty-chat">Select a chat</div>} />
-          <Route path="threads/:id" element={<Chat />} />
+          <Route path="threads/:id" element={<ChatView />} />
         </Route>
 
         {/* Catch-all */}

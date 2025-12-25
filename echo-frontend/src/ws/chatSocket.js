@@ -1,5 +1,6 @@
+import { API_BASE, WS_BASE } from "../config";
 export function connectChatSocket(token, onMessage) {
-    const ws = new WebSocket(`ws://localhost:8000/ws/chat?token=${token}`);
+    const ws = new WebSocket(`${WS_BASE}/ws/chat?token=${token}`);
 
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
